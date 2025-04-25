@@ -64,8 +64,7 @@ int main(int, const char**) {
 
     gpio_init(int_pin_0);
     gpio_set_dir(reset_pin_0, GPIO_IN);
-    gpio_set_irq_enabled_with_callback(int_pin_0, 
-        GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &gpio_callback);
+    gpio_set_irq_enabled_with_callback(int_pin_0, GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
 
     gpio_set_function(spi_cs_pin_0, GPIO_FUNC_SPI);
     gpio_set_function(spi_sck_pin_0, GPIO_FUNC_SPI);
