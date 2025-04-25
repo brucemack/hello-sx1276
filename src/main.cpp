@@ -48,11 +48,12 @@ int main(int, const char**) {
     gpio_put(LED_PIN, 0);
     sleep_ms(500);
 
+    // ----- Radio 0 Hookup 
+
     int spi_sck_pin_0 = 2;
     int spi_mosi_pin_0 = 3;
     int spi_miso_pin_0 = 4;
     int spi_cs_pin_0 = 5;
-
     int reset_pin_0 = 6;
     int_pin_0 = 7;
 
@@ -61,11 +62,10 @@ int main(int, const char**) {
     gpio_put(reset_pin_0, 1);
 
     gpio_init(int_pin_0);
-    gpio_set_dir(reset_pin_0, GPIO_IN);
+    gpio_set_dir(int_pin_0, GPIO_IN);
     gpio_set_irq_enabled_with_callback(int_pin_0, GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
 
     // The CS pin is not behaving the way we want, so drive manually
-    //gpio_set_function(spi_cs_pin_0, GPIO_FUNC_SPI);
     gpio_init(spi_cs_pin_0);
     gpio_set_dir(spi_cs_pin_0, GPIO_OUT);
     gpio_put(spi_cs_pin_0, 1);
@@ -75,20 +75,47 @@ int main(int, const char**) {
     gpio_set_function(spi_miso_pin_0, GPIO_FUNC_SPI);
     spi_init(spi0, 500000);
 
+    // ----- Radio 1 Hookup 
+
+    int spi_sck_pin_1 = 10;
+    int spi_mosi_pin_1 = 11;
+    int spi_miso_pin_1 = 12;
+    int spi_cs_pin_1 = 13;
+    int reset_pin_1 = 14;
+    int_pin_1 = 15;
+
+    gpio_init(reset_pin_1);
+    gpio_set_dir(reset_pin_1, GPIO_OUT);
+    gpio_put(reset_pin_1, 1);
+
+    gpio_init(int_pin_1);
+    gpio_set_dir(int_pin_1, GPIO_IN);
+    // First irq installs callback for all
+    gpio_set_irq_enabled(int_pin_1, GPIO_IRQ_EDGE_RISE, true);
+
+    // The CS pin is not behaving the way we want, so drive manually
+    gpio_init(spi_cs_pin_1);
+    gpio_set_dir(spi_cs_pin_1, GPIO_OUT);
+    gpio_put(spi_cs_pin_1, 1);
+
+    gpio_set_function(spi_sck_pin_1, GPIO_FUNC_SPI);
+    gpio_set_function(spi_mosi_pin_1, GPIO_FUNC_SPI);
+    gpio_set_function(spi_miso_pin_1, GPIO_FUNC_SPI);
+    spi_init(spi1, 500000);
+
     PicoClock clock;
-
-    // Setup the poll timers
-    PicoPollTimer radio_poll_0;
-    radio_poll_0.setIntervalUs(50 * 1000);
-
+    PicoPollTimer radio_poll;
+    radio_poll.setIntervalUs(50 * 1000);
     Log logger;
 
     logger.info("LoRa Driver Demonstration 1");
 
     SX1276Driver radio_0(logger, clock, reset_pin_0, spi_cs_pin_0, spi0);
     radio_0.reset_radio();
+    radio_0.send((const uint8_t*)"HELLO IZZY!", 10);
 
-    radio_0.send((const uint8_t*)"HELLO IZZ9!", 10);
+    SX1276Driver radio_1(logger, clock, reset_pin_1, spi_cs_pin_1, spi1);
+    radio_1.reset_radio();
 
     while (true) {        
 
@@ -98,14 +125,19 @@ int main(int, const char**) {
             int_flag_0 = false;
         }
         if (int_flag_1) {
+            radio_1.event_int();
             int_flag_1 = false;
         }        
         restore_interrupts(int_state);
 
+        // Fast poll
         radio_0.event_poll();
+        radio_1.event_poll();
 
-        if (radio_poll_0.poll()) {
+        // Slow poll
+        if (radio_poll.poll()) {
             radio_0.event_tick();
+            radio_1.event_tick();
         }
     }
 }

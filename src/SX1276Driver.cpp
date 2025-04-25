@@ -176,6 +176,10 @@ void SX1276Driver::event_RxDone(uint8_t irqFlags) {
             // Put the RSSI (OOB) and the entire packet into the circular queue for 
             // later processing.
             _rxBuffer.push((const uint8_t*)&lastRssi, rx_buf, len);
+
+            // #### TODO: REMOVE
+            //_log.debugDump("RX", rx_buf, len);
+            _log.info("Got %d", len);
         }
         // NOTE: Stay in RX state
     }

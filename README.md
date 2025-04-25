@@ -13,12 +13,25 @@ Build/Run
 Hardware Setup
 ==============
 
-    spi_sck_pin_0 = 2;
-    spi_mosi_pin_0 = 3;
-    spi_miso_pin_0 = 4;
-    spi_cs_pin_0 = 5;
-    reset_pin_0 = 6;
-    int_pin_0 = 7;
+Radio 0 Hookup
+
+* spi_sck_pin_0 = GP2
+* spi_mosi_pin_0 = GP3
+* spi_miso_pin_0 = GP4
+* spi_cs_pin_0 = GP5
+* (GND)
+* reset_pin_0 = GP6
+* int_pin_0 = GP7
+
+Radio 1 Hookup
+
+* spi_sck_pin_1 = GP10
+* spi_mosi_pin_1 = GP11
+* spi_miso_pin_1 = GP12
+* spi_cs_pin_1 = GP13
+* (GND)
+* reset_pin_1 = GP14
+* int_pin_1 = GP15
 
 WARS Radio Board 2022-04 Hookup (J1)
 
