@@ -6,6 +6,8 @@
 
 #include "SX1276Driver.h"
 
+#define SX1276_EXPECTED_VERSION (18)
+
 // The time we will wait for a TxDone interrupt before giving up.  This should
 // be an unusual case.
 #define TX_TIMEOUT_MS (30UL * 1000UL)
@@ -22,13 +24,18 @@
 
 namespace kc1fsz {
 
-SX1276Driver::SX1276Driver(Log& log, Clock& clock, int reset_pin, spi_inst_t* spi) 
-:   logger(log),
+SX1276Driver::SX1276Driver(Log& log, Clock& clock, int reset_pin, int cs_pin, spi_inst_t* spi) 
+:   _log(log),
     _mainClock(clock),
     _resetPin(reset_pin),
+    _csPin(cs_pin),
     _txBuffer(0),
     _rxBuffer(2),
     _spi(spi) {
+}
+
+void SX1276Driver::send(const uint8_t* msg, uint32_t msg_len) {
+    _txBuffer.push(0, msg, msg_len);
 }
 
 /**
@@ -43,7 +50,7 @@ void SX1276Driver::event_int() {
 
 void SX1276Driver::start_Tx() {
 
-    logger.println("start_Tx");
+    _log.info("start_Tx");
 
     // At this point we have something pending to be sent.
     // Go into stand-by so we are allowed to fill the FIFO
@@ -86,7 +93,7 @@ void SX1276Driver::start_Rx() {
  */
 void SX1276Driver::start_Cad() {      
 
-    logger.println("start_Cad");
+    _log.info("start_Cad");
 
     _state = State::CAD_STATE;
     _startCadTime = _mainClock.time();
@@ -107,17 +114,16 @@ void SX1276Driver::start_Idle() {
  */
 void SX1276Driver::event_TxDone(uint8_t irqFlags) {   
 
-    logger.println("TxDone");
-
     // If we expected this event
     if (_state == State::TX_STATE) {
+        _log.info("event_TxDone");
         // After transmit the radio goes back to standby mode
         // automatically
         _state = State::IDLE_STATE;
     }
     // Unexpected event
     else {
-        logger.println("WRN: Unexpected TxDone");
+        _log.error("Unexpected event_TxDone");
         start_Idle();
     }
 } 
@@ -129,16 +135,15 @@ void SX1276Driver::event_TxDone(uint8_t irqFlags) {
  */
 void SX1276Driver::event_RxDone(uint8_t irqFlags) {
 
-    logger.println("RxDone");
-
     // Record that some activity was seen on the channel
     _lastActivityTime = _mainClock.time();
 
     // Expected
     if (_state == State::RX_STATE) {
+        _log.info("event_RxDone");
         // Make sure we don't have any errors
         if (irqFlags & 0x20) {
-            logger.println("WRN: CRC error");
+            _log.error("CRC error");
             // Message is ignored
         }
         else {
@@ -176,7 +181,7 @@ void SX1276Driver::event_RxDone(uint8_t irqFlags) {
     }
     // Unexpected 
     else {
-        logger.println("WRN: Unexpected RxDone");
+        _log.error("Unexpected event_RxDone");
         start_Idle();
     }
 }
@@ -189,9 +194,9 @@ void SX1276Driver::event_CadDone(uint8_t irqFlags) {
 
     // Expected
     if (_state == State::CAD_STATE) {
+        _log.info("event_CadDone");
         // This is the case where activity was detected
         if (irqFlags & 0x01) {
-            logger.println("INF: CadDone Detection");
             _lastActivityTime = _mainClock.time();
             // Radio goes back to standby automatically after CAD
             _state = State::IDLE_STATE;
@@ -199,7 +204,7 @@ void SX1276Driver::event_CadDone(uint8_t irqFlags) {
     }
     // Unexpected
     else {
-        logger.println("WRN: Unexpected CadDone");
+        _log.error("Unexpected event_CadDone");
         start_Idle();
     }
 }
@@ -216,9 +221,7 @@ void SX1276Driver::event_poll() {
         return;
     }
     
-    //if (systemConfig.getLogLevel() > 0) {
-    logger.println("INF: Int");
-    //}
+    _log.info("Radio interrupt");
 
     // *******************************************************************************
     // Critical Section:
@@ -258,7 +261,7 @@ void SX1276Driver::event_tick_Idle() {
     // Make sure the radio is in the state that we expect
     uint8_t state = spi_read(0x01);  
     if (state != 0x81) {
-        logger.println("WRN: Radio in unexpected state.");
+        _log.error("Radio in unexpected state.");
         reset_radio();
         return;
     }
@@ -276,7 +279,7 @@ void SX1276Driver::event_tick_Idle() {
 void SX1276Driver::event_tick_Tx() {
     // Check for the case where a transmission times out
     if (_mainClock.time() - _startTxTime > TX_TIMEOUT_MS) {
-        logger.println("ERR: TX time out");
+        _log.error("TX time out");
         start_Idle();
     }
 }
@@ -399,13 +402,13 @@ void SX1276Driver::write_message(uint8_t* data, uint8_t len) {
 }
 
 int SX1276Driver::reset_radio() {
-  
+   
     gpio_set_dir(_resetPin, GPIO_OUT);
     gpio_put(_resetPin, 0);
     _delay(5);
     gpio_put(_resetPin, 1);
     // Float the reset pin
-    gpio_set_dir(_resetPin, GPIO_IN);
+    //gpio_set_dir(_resetPin, GPIO_IN);
     // Per datasheet, wait 5ms after reset
     _delay(5);
     // Not sure if this is really needed:
@@ -413,11 +416,11 @@ int SX1276Driver::reset_radio() {
 
     // Initialize the radio
     if (init_radio() != 0) {
-        logger.println("ERR: Problem with radio initialization");
+        _log.error("Problem with radio initialization");
         return -1;
     }
 
-    logger.println("INF: Radio initialized");
+    _log.info("Radio initialized");
 
     start_Idle();
 
@@ -480,8 +483,8 @@ int SX1276Driver::init_radio() {
 
     // Check the radio version to make sure things are connected
     uint8_t ver = spi_read(0x42);
-    if (ver != 18) {
-        logger.println("ERROR: Version mismatch");
+    if (ver < SX1276_EXPECTED_VERSION) {
+        _log.error("Version mismatch");
         return -1;
     }
 
@@ -557,7 +560,9 @@ uint8_t SX1276Driver::spi_read(uint8_t reg) {
     // meaningless.  Make sure the R/W bit is 0.
     const uint8_t out_workarea[2] = { (uint8_t)(reg & ~0x80), 0 };
     uint8_t in_workarea[2];
+    gpio_put(_csPin, 0);
     spi_write_read_blocking(_spi, out_workarea, in_workarea, 2);
+    gpio_put(_csPin, 1);
     return in_workarea[1];
 }
 
@@ -567,7 +572,9 @@ void SX1276Driver::spi_read_multi(uint8_t reg, uint8_t* buf, uint8_t len) {
     // The rest of the oubound data is meaningless.
     const uint8_t out_workarea[256] = { (uint8_t)(reg & ~0x80) };
     uint8_t in_workarea[256];
+    gpio_put(_csPin, 0);
     spi_write_read_blocking(_spi, out_workarea, in_workarea, len + 1);
+    gpio_put(_csPin, 1);
     memcpy(buf, in_workarea + 1, len);
 }
 
@@ -576,7 +583,9 @@ uint8_t SX1276Driver::spi_write(uint8_t reg, uint8_t val) {
     // the second outbound. Make sure the R/W bit is 1.
     const uint8_t out_workarea[2] = { (uint8_t)(reg | 0x80), val };
     uint8_t in_workarea[2];
+    gpio_put(_csPin, 0);
     spi_write_read_blocking(_spi, out_workarea, in_workarea, 2);
+    gpio_put(_csPin, 1);
     return in_workarea[1];
 }
 
@@ -587,7 +596,9 @@ uint8_t SX1276Driver::spi_write_multi(uint8_t reg, const uint8_t* buf, uint8_t l
     uint8_t out_workarea[256] = { (uint8_t)(reg | 0x80) };
     memcpy(out_workarea + 1, buf, len);
     uint8_t in_workarea[256];
+    gpio_put(_csPin, 0);
     spi_write_read_blocking(_spi, out_workarea, in_workarea, len + 1);
+    gpio_put(_csPin, 1);
     return in_workarea[1];
 }
 

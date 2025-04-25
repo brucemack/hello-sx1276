@@ -48,15 +48,13 @@ int main(int, const char**) {
     gpio_put(LED_PIN, 0);
     sleep_ms(500);
 
-    printf("LoRa Driver Demonstration 1\n");
+    int spi_sck_pin_0 = 2;
+    int spi_mosi_pin_0 = 3;
+    int spi_miso_pin_0 = 4;
+    int spi_cs_pin_0 = 5;
 
-    int reset_pin_0 = 9;
-    int_pin_0 = 10;
-
-    int spi_sck_pin_0 = 4;
-    int spi_mosi_pin_0 = 5;
-    int spi_miso_pin_0 = 6;
-    int spi_cs_pin_0 = 7;
+    int reset_pin_0 = 6;
+    int_pin_0 = 7;
 
     gpio_init(reset_pin_0);
     gpio_set_dir(reset_pin_0, GPIO_OUT);
@@ -66,7 +64,12 @@ int main(int, const char**) {
     gpio_set_dir(reset_pin_0, GPIO_IN);
     gpio_set_irq_enabled_with_callback(int_pin_0, GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
 
-    gpio_set_function(spi_cs_pin_0, GPIO_FUNC_SPI);
+    // The CS pin is not behaving the way we want, so drive manually
+    //gpio_set_function(spi_cs_pin_0, GPIO_FUNC_SPI);
+    gpio_init(spi_cs_pin_0);
+    gpio_set_dir(spi_cs_pin_0, GPIO_OUT);
+    gpio_put(spi_cs_pin_0, 1);
+
     gpio_set_function(spi_sck_pin_0, GPIO_FUNC_SPI);
     gpio_set_function(spi_mosi_pin_0, GPIO_FUNC_SPI);
     gpio_set_function(spi_miso_pin_0, GPIO_FUNC_SPI);
@@ -80,8 +83,12 @@ int main(int, const char**) {
 
     Log logger;
 
-    SX1276Driver radio_0(logger, clock, reset_pin_0, spi0);
+    logger.info("LoRa Driver Demonstration 1");
+
+    SX1276Driver radio_0(logger, clock, reset_pin_0, spi_cs_pin_0, spi0);
     radio_0.reset_radio();
+
+    radio_0.send((const uint8_t*)"HELLO IZZ9!", 10);
 
     while (true) {        
 

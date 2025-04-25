@@ -14,7 +14,7 @@ class SX1276Driver {
 
 public:
 
-    SX1276Driver(Log& log, Clock& clock, int reset_pin, spi_inst_t* spi);
+    SX1276Driver(Log& log, Clock& clock, int reset_pin, int cs_pin, spi_inst_t* spi);
 
     int reset_radio();
     // Called by interrupt pin
@@ -23,6 +23,9 @@ public:
     void event_tick();
     // This should be called as quickly/often as possible
     void event_poll();
+
+    // Puts something on the send queue
+    void send(const uint8_t* msg, uint32_t msg_len);
 
 private:
 
@@ -80,9 +83,10 @@ private:
      */
     void _delay(int ms);
 
-    Log& logger;
+    Log& _log;
     Clock& _mainClock;
     int _resetPin;
+    int _csPin;
 
     // The states of the state machine
     enum State { IDLE_STATE, RX_STATE, TX_STATE, CAD_STATE };
