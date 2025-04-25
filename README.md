@@ -1,1 +1,4 @@
-# hello-sx1276
+Initialize submodules:
+
+        git submodule update --init --recursive
+

@@ -1,6 +1,7 @@
 #ifndef _SX1276Driver_h
 #define _SX1276Driver_h
 
+#include <stdint.h>
 #include <kc1fsz-tools/CircularBuffer.h>
 #include <kc1fsz-tools/Clock.h>
 
