@@ -11,12 +11,13 @@ class SX1276Driver {
 
 public:
 
-    SX1276Driver(Clock& clock);
+    SX1276Driver(Clock& clock, int reset_pin);
 
-    void init();
-
-    void isr();
+    int reset_radio();
+    // Called by interrupt pin
+    void event_int();
     void event_tick();
+    void check_for_interrupts();
 
 private:
 
@@ -31,7 +32,6 @@ private:
     void event_tick_Tx();
     void event_tick_Rx();
     void event_tick_Cad();
-    void check_for_interrupts();
 
     void set_mode_SLEEP();
     void set_mode_STDBY();
@@ -45,7 +45,6 @@ private:
     void enable_interrupt_CadDone();
     void set_frequency(float freq_mhz);
     void write_message(uint8_t* data, uint8_t len);
-    int reset_radio();
     void set_ocp(uint8_t current_ma);
     void set_low_datarate();
     int init_radio(); 
@@ -57,11 +56,16 @@ private:
     void disable_interrupts();
     void enable_interrupts();
 
-
     uint32_t _random(uint32_t, uint32_t);
-    void _delay(uint32_t);
+
+    /**
+     * Causes a sleep
+     * @param sleep_ms The delay time in milliseconds
+     */
+    void _delay(int ms);
 
     Clock& _mainClock;
+    int _resetPin;
 
     // The states of the state machine
     enum State { IDLE_STATE, RX_STATE, TX_STATE, CAD_STATE };

@@ -14,6 +14,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0")
 add_executable(main
   src/main.cpp
   src/SX1276Driver.cpp
+  kc1fsz-tools-cpp/src/rp2040/PicoPollTimer.cpp
 )
 
 target_include_directories(main PRIVATE 

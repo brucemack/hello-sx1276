@@ -1,3 +1,7 @@
+#include <cmath>
+#include "pico/stdlib.h"
+#include "hardware/gpio.h"
+
 #include "SX1276Driver.h"
 
 // Watchdog timeout in seconds (NOTE: I think this time might be off because
@@ -20,20 +24,17 @@
 
 namespace kc1fsz {
 
-SX1276Driver::SX1276Driver(Clock& clock) : 
-    _mainClock(clock),
+SX1276Driver::SX1276Driver(Clock& clock, int reset_pin) 
+:   _mainClock(clock),
+    _resetPin(reset_pin),
     _txBuffer(0),
     _rxBuffer(2) {
-}
-
-void SX1276Driver::init() {
-
 }
 
 /**
  * @brief This should be called by the ISR
  */
-void SX1276Driver::isr() {
+void SX1276Driver::event_int() {
     // NOTE: We've had so many problems with interrupt enable/disable on the ESP32
     // so now we're just going to set a flag and let everything happen in the loop()
     // context. This eliminates a lot of risk around concurrency, etc.
@@ -302,7 +303,9 @@ void SX1276Driver::event_tick_Rx() {
 void SX1276Driver::event_tick_Cad() {
     // Check for the case where a CAD check times out.  A random timeout is 
     // used to try to reduce collisions
-    if ((_mainClock.time() - _startCadTime) > (CAD_TIMEOUT_MS * _random(1, 3))) {
+    //if ((_mainClock.time() - _startCadTime) > (CAD_TIMEOUT_MS * _random(1, 3))) {
+    // TODO: GET THE RANDOMNESS BACK
+    if ((_mainClock.time() - _startCadTime) > (CAD_TIMEOUT_MS * 2)) {
         // If a CAD times out then that means that it is safe 
         // to transmit. 
         if (!_txBuffer.isEmpty()) {
@@ -398,14 +401,19 @@ void SX1276Driver::write_message(uint8_t* data, uint8_t len) {
 
 int SX1276Driver::reset_radio() {
   
-    pinMode(RST_PIN, OUTPUT);
-    digitalWrite(RST_PIN, HIGH);
+    //pinMode(RST_PIN, OUTPUT);
+    //digitalWrite(RST_PIN, HIGH);
+    gpio_set_dir(_resetPin, GPIO_OUT);
+    gpio_put(_resetPin, 1);
     _delay(5);
-    digitalWrite(RST_PIN, LOW);
+    //digitalWrite(RST_PIN, LOW);
+    gpio_put(_resetPin, 0);
     _delay(5);
-    digitalWrite(RST_PIN, HIGH);
+    //digitalWrite(RST_PIN, HIGH);
+    gpio_put(_resetPin, 1);
     // Float the reset pin
-    pinMode(RST_PIN, INPUT);
+    //pinMode(RST_PIN, INPUT);
+    gpio_set_dir(_resetPin, GPIO_IN);
     // Per datasheet, wait 5ms after reset
     _delay(5);
     // Not sure if this is really needed:
@@ -548,6 +556,35 @@ int SX1276Driver::init_radio() {
     set_low_datarate();
 
     return 0;
+}
+
+// ----- SPI Glue Code --------------------------------------------------------
+
+uint8_t SX1276Driver::spi_read(uint8_t reg) {
+    return 0;
+}
+
+void SX1276Driver::spi_read_multi(uint8_t reg, uint8_t* buf, uint8_t len) {
+}
+
+uint8_t SX1276Driver::spi_write(uint8_t reg, uint8_t val) {
+    return 0;
+}
+
+uint8_t SX1276Driver::spi_write_multi(uint8_t reg, uint8_t* buf, uint8_t len) {
+    return 0;
+}
+
+// ----- Other Glue -----------------------------------------------------------
+
+void SX1276Driver::disable_interrupts() {
+}
+
+void SX1276Driver::enable_interrupts() {
+}
+
+void SX1276Driver::_delay(int ms) {
+    sleep_ms(ms);
 }
 
 }
