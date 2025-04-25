@@ -1,8 +1,27 @@
 #include "SX1276Driver.h"
 
+// Watchdog timeout in seconds (NOTE: I think this time might be off because
+// we are changing the CPU clock frequency)
+#define WDT_TIMEOUT 5
+
+// The time we will wait for a TxDone interrupt before giving up.  This should
+// be an unusual case.
+#define TX_TIMEOUT_MS (30UL * 1000UL)
+
+// The time we will wait for a CadDone interrupt before giving up. 
+#define CAD_TIMEOUT_MS (50UL)
+
+// The time we wait for a RxDone interrupt before giving up and going 
+// into idle mode.  This is done to avoid any bugs that might come
+// up where we get completely stuck in the receive state.
+#define RX_TIMEOUT_MS 60 * 1000
+
+#define STATION_FREQUENCY (906.5)
+
 namespace kc1fsz {
 
-SX1276Driver::SX1276Driver() : 
+SX1276Driver::SX1276Driver(Clock& clock) : 
+    _mainClock(clock),
     _txBuffer(0),
     _rxBuffer(2) {
 }
@@ -33,14 +52,14 @@ void SX1276Driver::start_Tx() {
     // Pop the data off the TX queue into the transmit buffer.  
     unsigned int tx_buf_len = 256;
     uint8_t tx_buf[tx_buf_len];
-    txBuffer.pop(0, tx_buf, &tx_buf_len);
+    _txBuffer.pop(0, tx_buf, &tx_buf_len);
 
     // Move the data into the radio FIFO
     write_message(tx_buf, tx_buf_len);
     
     // Go into transmit mode
-    state = State::TX_STATE;
-    startTxTime = mainClock.time();
+    _state = State::TX_STATE;
+    _startTxTime = _mainClock.time();
     enable_interrupt_TxDone();
     set_mode_TX();
 }
@@ -49,8 +68,8 @@ void SX1276Driver::start_Tx() {
  * @brief Put the radio into receive mode and enable the RxDone interrupt.
  */
 void SX1276Driver::start_Rx() {
-    state = State::RX_STATE;
-    startRxTime = mainClock.time();
+    _state = State::RX_STATE;
+    _startRxTime = _mainClock.time();
     // Ask for interrupt when receiving
     enable_interrupt_RxDone();
     set_mode_RXCONTINUOUS();
@@ -68,14 +87,14 @@ void SX1276Driver::start_Cad() {
 
     //logger.println("start_Cad");
 
-    state = State::CAD_STATE;
-    startCadTime = mainClock.time();
+    _state = State::CAD_STATE;
+    _startCadTime = _mainClock.time();
     enable_interrupt_CadDone();
     set_mode_CAD();  
 }
 
 void SX1276Driver::start_Idle() {
-    state = State::IDLE_STATE;
+    _state = State::IDLE_STATE;
     set_mode_STDBY();
 }
 
@@ -90,14 +109,14 @@ void SX1276Driver::event_TxDone(uint8_t irqFlags) {
     //logger.println("TxDone");
 
     // If we expected this event
-    if (state == State::TX_STATE) {
+    if (_state == State::TX_STATE) {
         // After transmit the radio goes back to standby mode
         // automatically
-        state = State::IDLE_STATE;
+        _state = State::IDLE_STATE;
     }
     // Unexpected event
     else {
-        logger.println("WRN: Unexpected TxDone");
+        //logger.println("WRN: Unexpected TxDone");
         start_Idle();
     }
 } 
@@ -112,15 +131,15 @@ void SX1276Driver::event_RxDone(uint8_t irqFlags) {
     //logger.println("RxDone");
 
     // Record that some activity was seen on the channel
-    lastActivityTime = mainClock.time();
+    _lastActivityTime = _mainClock.time();
 
     // Expected
-    if (state == State::RX_STATE) {
+    if (_state == State::RX_STATE) {
         // Make sure we don't have any errors
         if (irqFlags & 0x20) {
-            if (systemConfig.getLogLevel() > 0) {
-               logger.println("WRN: CRC error");
-            }
+            //if (systemConfig.getLogLevel() > 0) {
+            //   logger.println("WRN: CRC error");
+            //}
             // Message is ignored
         }
         else {
@@ -152,13 +171,13 @@ void SX1276Driver::event_RxDone(uint8_t irqFlags) {
 
             // Put the RSSI (OOB) and the entire packet into the circular queue for 
             // later processing.
-            rxBuffer.push((const uint8_t*)&lastRssi, rx_buf, len);
+            _rxBuffer.push((const uint8_t*)&lastRssi, rx_buf, len);
         }
         // NOTE: Stay in RX state
     }
     // Unexpected 
     else {
-        logger.println("WRN: Unexpected RxDone");
+        //logger.println("WRN: Unexpected RxDone");
         start_Idle();
     }
 }
@@ -170,18 +189,18 @@ void SX1276Driver::event_RxDone(uint8_t irqFlags) {
 void SX1276Driver::event_CadDone(uint8_t irqFlags) {
 
     // Expected
-    if (state == State::CAD_STATE) {
+    if (_state == State::CAD_STATE) {
         // This is the case where activity was detected
         if (irqFlags & 0x01) {
-            logger.println("INF: CadDone Detection");
-            lastActivityTime = mainClock.time();
+            //logger.println("INF: CadDone Detection");
+            _lastActivityTime = _mainClock.time();
             // Radio goes back to standby automatically after CAD
-            state = State::IDLE_STATE;
+            _state = State::IDLE_STATE;
         }
     }
     // Unexpected
     else {
-        logger.println("WRN: Unexpected CadDone");
+        //logger.println("WRN: Unexpected CadDone");
         start_Idle();
     }
 }
@@ -194,22 +213,21 @@ void SX1276Driver::event_CadDone(uint8_t irqFlags) {
 void SX1276Driver::check_for_interrupts() {
 
     // Look at the flag that gets set by the ISR itself
-    if (!isrHit) {
+    if (!_isrHit) {
         return;
-    } else {
-        if (systemConfig.getLogLevel() > 0) {
-            logger.println("INF: Int");
-        }
     }
+    //if (systemConfig.getLogLevel() > 0) {
+    //    logger.println("INF: Int");
+    //}
 
     // *******************************************************************************
     // Critical Section:
     // Here we make sure that the clearing of the isr_hit flag and the unloading 
     // of the pending interrupts in the radio's IRQ register happen atomically.
     // We are avoding the case where 
-    noInterrupts();
+    disable_interrupts();
 
-    isrHit = false;
+    _isrHit = false;
 
     // Read and reset the IRQ register at the same time:
     uint8_t irq_flags = spi_write(0x12, 0xff);    
@@ -218,7 +236,7 @@ void SX1276Driver::check_for_interrupts() {
     // clearing the ISR sometimes.  Notice we do a logical OR so we don't loose anything.
     irq_flags |= spi_write(0x12, 0xff);    
 
-    interrupts();
+    enable_interrupts();
     // *******************************************************************************
     
     // RxDone 
@@ -240,13 +258,13 @@ void SX1276Driver::event_tick_Idle() {
     // Make sure the radio is in the state that we expect
     uint8_t state = spi_read(0x01);  
     if (state != 0x81) {
-        logger.println("WRN: Radio in unexpected state.");
+        //logger.println("WRN: Radio in unexpected state.");
         reset_radio();
         return;
     }
       
     // Check to see if there is data waiting to go out
-    if (!txBuffer.isEmpty()) {
+    if (!_txBuffer.isEmpty()) {
         // Launch a CAD check to see if the channel is clear
         start_Cad(); 
     } 
@@ -257,8 +275,8 @@ void SX1276Driver::event_tick_Idle() {
 
 void SX1276Driver::event_tick_Tx() {
     // Check for the case where a transmission times out
-    if (mainClock.time() - startTxTime > TX_TIMEOUT_MS) {
-        logger.println("ERR: TX time out");
+    if (_mainClock.time() - _startTxTime > TX_TIMEOUT_MS) {
+        //logger.println("ERR: TX time out");
         start_Idle();
     }
 }
@@ -267,7 +285,7 @@ void SX1276Driver::event_tick_Rx() {
 
     // Check for pending transmissions.  If nothing is pending then 
     // return without any state change.
-    if (!txBuffer.isEmpty()) {
+    if (!_txBuffer.isEmpty()) {
         // At this point we know there is something pending.  We first 
         // go into CAD mode to make sure the channel is innactive.
         // A successful CAD check (with no detection) will trigger 
@@ -276,7 +294,7 @@ void SX1276Driver::event_tick_Rx() {
     }
 
     // Check for the case where a receive times out
-    if (mainClock.time() - startRxTime > RX_TIMEOUT_MS) {
+    if (_mainClock.time() - _startRxTime > RX_TIMEOUT_MS) {
         start_Idle();
     }
 }
@@ -284,10 +302,10 @@ void SX1276Driver::event_tick_Rx() {
 void SX1276Driver::event_tick_Cad() {
     // Check for the case where a CAD check times out.  A random timeout is 
     // used to try to reduce collisions
-    if ((mainClock.time() - startCadTime) > (CAD_TIMEOUT_MS * random(1, 3))) {
+    if ((_mainClock.time() - _startCadTime) > (CAD_TIMEOUT_MS * _random(1, 3))) {
         // If a CAD times out then that means that it is safe 
         // to transmit. 
-        if (!txBuffer.isEmpty()) {
+        if (!_txBuffer.isEmpty()) {
             start_Tx();
         } else {
             start_Idle();
@@ -297,17 +315,16 @@ void SX1276Driver::event_tick_Cad() {
 
 // Call periodically to look for timeouts or other pending activity.  
 // This will happen on the regular application thread.
-bool SX1276Driver::event_tick(void*) {
-    if (state == State::RX_STATE) {
+void SX1276Driver::event_tick() {
+    if (_state == State::RX_STATE) {
         event_tick_Rx();
-    } else if (state == State::TX_STATE) {
+    } else if (_state == State::TX_STATE) {
         event_tick_Tx();
-    } else if (state == State::CAD_STATE) {
+    } else if (_state == State::CAD_STATE) {
         event_tick_Cad();
-    } else if (state == State::IDLE_STATE) {
+    } else if (_state == State::IDLE_STATE) {
         event_tick_Idle();
     } 
-    return true;
 }
 
 // --------------------------------------------------------------------------
@@ -383,33 +400,24 @@ int SX1276Driver::reset_radio() {
   
     pinMode(RST_PIN, OUTPUT);
     digitalWrite(RST_PIN, HIGH);
-    delay(5);
+    _delay(5);
     digitalWrite(RST_PIN, LOW);
-    delay(5);
+    _delay(5);
     digitalWrite(RST_PIN, HIGH);
     // Float the reset pin
     pinMode(RST_PIN, INPUT);
     // Per datasheet, wait 5ms after reset
-    delay(5);
+    _delay(5);
     // Not sure if this is really needed:
-    delay(250);
+    _delay(250);
 
     // Initialize the radio
     if (init_radio() != 0) {
-        logger.println(F("ERR: Problem with radio initialization"));
+        //logger.println(F("ERR: Problem with radio initialization"));
         return -1;
     }
 
-    logger.println(F("INF: Radio initialized"));
-
-    // Flash the LED as a diagnostic indicator 
-    digitalWrite(LED_PIN, HIGH);
-    delay(200);
-    digitalWrite(LED_PIN, LOW);
-    delay(200);
-    digitalWrite(LED_PIN, HIGH);
-    delay(200);
-    digitalWrite(LED_PIN, LOW);
+    //logger.println(F("INF: Radio initialized"));
 
     start_Idle();
 
@@ -432,10 +440,11 @@ void SX1276Driver::set_ocp(uint8_t current_ma) {
     spi_write(0x0b, 0x20 | (0x1F & trim));
 }
 
-void SX1276Driver::setLowDatarate() {
+void SX1276Driver::set_low_datarate() {
 
-    // called after changing bandwidth and/or spreading factor
-    //  Semtech modem design guide AN1200.13 says 
+    // Called after changing bandwidth and/or spreading factor
+    // Semtech modem design guide AN1200.13 says:
+    //
     // "To avoid issues surrounding  drift  of  the  crystal  reference  oscillator  due  to  either  temperature  change  
     // or  motion,the  low  data  rate optimization  bit  is  used. Specifically for 125  kHz  bandwidth  and  SF  =  11  and  12,  
     // this  adds  a  small  overhead  to increase robustness to reference frequency variations over the timescale of the LoRa packet."
@@ -477,8 +486,10 @@ int SX1276Driver::init_radio() {
 
     // Switch into Sleep mode, LoRa mode
     spi_write(0x01, 0x80);
+
     // Wait for sleep mode 
-    delay(10); 
+    // #### TODO: QUANTIFY
+    _delay(10); 
 
     // Make sure we are actually in sleep mode
     if (spi_read(0x01) != 0x80) {
@@ -534,7 +545,7 @@ int SX1276Driver::init_radio() {
     //spi_write(0x20, 8 >> 8);
     //spi_write(0x21, 8 & 0xff);
 
-    setLowDatarate();
+    set_low_datarate();
 
     return 0;
 }

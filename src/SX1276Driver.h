@@ -2,6 +2,7 @@
 #define _SX1276Driver_h
 
 #include <kc1fsz-tools/CircularBuffer.h>
+#include <kc1fsz-tools/Clock.h>
 
 namespace kc1fsz {
 
@@ -9,11 +10,57 @@ class SX1276Driver {
 
 public:
 
-    SX1276Driver();
+    SX1276Driver(Clock& clock);
 
     void init();
 
+    void isr();
+    void event_tick();
+
 private:
+
+    void start_Tx();
+    void start_Rx();
+    void start_Cad();
+    void start_Idle();
+    void event_TxDone(uint8_t irqFlags);
+    void event_RxDone(uint8_t irqFlags);
+    void event_CadDone(uint8_t irqFlags);
+    void event_tick_Idle();
+    void event_tick_Tx();
+    void event_tick_Rx();
+    void event_tick_Cad();
+    void check_for_interrupts();
+
+    void set_mode_SLEEP();
+    void set_mode_STDBY();
+    void set_mode_TX();    
+    void set_mode_RXCONTINUOUS();
+    void set_mode_RXSINGLE();
+    void set_mode_CAD();
+    
+    void enable_interrupt_TxDone();    
+    void enable_interrupt_RxDone();
+    void enable_interrupt_CadDone();
+    void set_frequency(float freq_mhz);
+    void write_message(uint8_t* data, uint8_t len);
+    int reset_radio();
+    void set_ocp(uint8_t current_ma);
+    void set_low_datarate();
+    int init_radio(); 
+
+    uint8_t spi_read(uint8_t reg);
+    void spi_read_multi(uint8_t reg, uint8_t* buf, uint8_t len);
+    uint8_t spi_write(uint8_t reg, uint8_t val);
+    uint8_t spi_write_multi(uint8_t reg, uint8_t* buf, uint8_t len);
+    void disable_interrupts();
+    void enable_interrupts();
+
+
+    uint32_t _random(uint32_t, uint32_t);
+    void _delay(uint32_t);
+
+    Clock& _mainClock;
 
     // The states of the state machine
     enum State { IDLE_STATE, RX_STATE, TX_STATE, CAD_STATE };
