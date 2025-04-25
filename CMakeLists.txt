@@ -14,6 +14,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0")
 add_executable(main
   src/main.cpp
   src/SX1276Driver.cpp
+  kc1fsz-tools-cpp/src/Common.cpp
   kc1fsz-tools-cpp/src/rp2040/PicoPollTimer.cpp
 )
 
@@ -24,5 +25,5 @@ target_include_directories(main PRIVATE
 )
 
 pico_enable_stdio_usb(main 1)
-target_link_libraries(main pico_stdlib hardware_i2c)
+target_link_libraries(main pico_stdlib hardware_i2c hardware_spi)
 

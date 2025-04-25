@@ -1,12 +1,10 @@
 #include <cmath>
+#include <cstring>
+
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 
 #include "SX1276Driver.h"
-
-// Watchdog timeout in seconds (NOTE: I think this time might be off because
-// we are changing the CPU clock frequency)
-#define WDT_TIMEOUT 5
 
 // The time we will wait for a TxDone interrupt before giving up.  This should
 // be an unusual case.
@@ -24,11 +22,13 @@
 
 namespace kc1fsz {
 
-SX1276Driver::SX1276Driver(Clock& clock, int reset_pin) 
-:   _mainClock(clock),
+SX1276Driver::SX1276Driver(Log& log, Clock& clock, int reset_pin, spi_inst_t* spi) 
+:   logger(log),
+    _mainClock(clock),
     _resetPin(reset_pin),
     _txBuffer(0),
-    _rxBuffer(2) {
+    _rxBuffer(2),
+    _spi(spi) {
 }
 
 /**
@@ -209,14 +209,15 @@ void SX1276Driver::event_CadDone(uint8_t irqFlags) {
 /**
  * @brief This function gets called from inside of the main processing loop.  It looks
  * to see if any interrupt activity has been detected and, if so, figure 
- * out what kind of interrupt was reported and calls the correct handler.
+ * out what kind of interrupt was reported and call the correct handler.
  */ 
-void SX1276Driver::check_for_interrupts() {
+void SX1276Driver::event_poll() {
 
     // Look at the flag that gets set by the ISR itself
     if (!_isrHit) {
         return;
     }
+    
     //if (systemConfig.getLogLevel() > 0) {
     //    logger.println("INF: Int");
     //}
@@ -226,7 +227,7 @@ void SX1276Driver::check_for_interrupts() {
     // Here we make sure that the clearing of the isr_hit flag and the unloading 
     // of the pending interrupts in the radio's IRQ register happen atomically.
     // We are avoding the case where 
-    disable_interrupts();
+    //disable_interrupts();
 
     _isrHit = false;
 
@@ -237,7 +238,7 @@ void SX1276Driver::check_for_interrupts() {
     // clearing the ISR sometimes.  Notice we do a logical OR so we don't loose anything.
     irq_flags |= spi_write(0x12, 0xff);    
 
-    enable_interrupts();
+    //enable_interrupts();
     // *******************************************************************************
     
     // RxDone 
@@ -401,18 +402,11 @@ void SX1276Driver::write_message(uint8_t* data, uint8_t len) {
 
 int SX1276Driver::reset_radio() {
   
-    //pinMode(RST_PIN, OUTPUT);
-    //digitalWrite(RST_PIN, HIGH);
     gpio_set_dir(_resetPin, GPIO_OUT);
-    gpio_put(_resetPin, 1);
-    _delay(5);
-    //digitalWrite(RST_PIN, LOW);
     gpio_put(_resetPin, 0);
     _delay(5);
-    //digitalWrite(RST_PIN, HIGH);
     gpio_put(_resetPin, 1);
     // Float the reset pin
-    //pinMode(RST_PIN, INPUT);
     gpio_set_dir(_resetPin, GPIO_IN);
     // Per datasheet, wait 5ms after reset
     _delay(5);
@@ -421,7 +415,7 @@ int SX1276Driver::reset_radio() {
 
     // Initialize the radio
     if (init_radio() != 0) {
-        //logger.println(F("ERR: Problem with radio initialization"));
+        logger.println("ERR: Problem with radio initialization");
         return -1;
     }
 
@@ -561,27 +555,45 @@ int SX1276Driver::init_radio() {
 // ----- SPI Glue Code --------------------------------------------------------
 
 uint8_t SX1276Driver::spi_read(uint8_t reg) {
-    return 0;
+    // Setup the address in the first outbound byte, second outbound is 
+    // meaningless.  Make sure the R/W bit is 0.
+    const uint8_t out_workarea[2] = { (uint8_t)(reg & ~0x80), 0 };
+    uint8_t in_workarea[2];
+    spi_write_read_blocking(_spi, out_workarea, in_workarea, 2);
+    return in_workarea[1];
 }
 
 void SX1276Driver::spi_read_multi(uint8_t reg, uint8_t* buf, uint8_t len) {
+    assert(len <= 255);
+    // Setup the address in the first outbound byte.  Make sure the R/W bit is 0.
+    // The rest of the oubound data is meaningless.
+    const uint8_t out_workarea[256] = { (uint8_t)(reg & ~0x80) };
+    uint8_t in_workarea[256];
+    spi_write_read_blocking(_spi, out_workarea, in_workarea, len + 1);
+    memcpy(buf, in_workarea + 1, len);
 }
 
 uint8_t SX1276Driver::spi_write(uint8_t reg, uint8_t val) {
-    return 0;
+    // Setup the address in the first outbound byte, and the data in 
+    // the second outbound. Make sure the R/W bit is 1.
+    const uint8_t out_workarea[2] = { (uint8_t)(reg | 0x80), val };
+    uint8_t in_workarea[2];
+    spi_write_read_blocking(_spi, out_workarea, in_workarea, 2);
+    return in_workarea[1];
 }
 
-uint8_t SX1276Driver::spi_write_multi(uint8_t reg, uint8_t* buf, uint8_t len) {
-    return 0;
+uint8_t SX1276Driver::spi_write_multi(uint8_t reg, const uint8_t* buf, uint8_t len) {
+    assert(len <= 255);
+    // Setup the address in the first outbound byte.  Make sure the R/W bit is 0.
+    // The rest of the oubound data is meaningless.
+    uint8_t out_workarea[256] = { (uint8_t)(reg & ~0x80) };
+    memcpy(out_workarea + 1, buf, len);
+    uint8_t in_workarea[256];
+    spi_write_read_blocking(_spi, out_workarea, in_workarea, len + 1);
+    return in_workarea[1];
 }
 
 // ----- Other Glue -----------------------------------------------------------
-
-void SX1276Driver::disable_interrupts() {
-}
-
-void SX1276Driver::enable_interrupts() {
-}
 
 void SX1276Driver::_delay(int ms) {
     sleep_ms(ms);

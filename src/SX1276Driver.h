@@ -2,6 +2,9 @@
 #define _SX1276Driver_h
 
 #include <stdint.h>
+#include "hardware/spi.h"
+
+#include <kc1fsz-tools/Log.h>
 #include <kc1fsz-tools/CircularBuffer.h>
 #include <kc1fsz-tools/Clock.h>
 
@@ -11,13 +14,15 @@ class SX1276Driver {
 
 public:
 
-    SX1276Driver(Clock& clock, int reset_pin);
+    SX1276Driver(Log& log, Clock& clock, int reset_pin, spi_inst_t* spi);
 
     int reset_radio();
     // Called by interrupt pin
     void event_int();
+    // This should be called every 50-100ms.
     void event_tick();
-    void check_for_interrupts();
+    // This should be called as quickly/often as possible
+    void event_poll();
 
 private:
 
@@ -50,13 +55,24 @@ private:
     int init_radio(); 
 
     uint8_t spi_read(uint8_t reg);
-    void spi_read_multi(uint8_t reg, uint8_t* buf, uint8_t len);
-    uint8_t spi_write(uint8_t reg, uint8_t val);
-    uint8_t spi_write_multi(uint8_t reg, uint8_t* buf, uint8_t len);
-    void disable_interrupts();
-    void enable_interrupts();
 
-    uint32_t _random(uint32_t, uint32_t);
+    /**
+     * @param len must be <= 255 bytes!
+     */
+    void spi_read_multi(uint8_t reg, uint8_t* buf, uint8_t len);
+
+    /**
+     * @returns Whatever comes back during the second byte transfer.
+     */
+    uint8_t spi_write(uint8_t reg, uint8_t val);
+
+    /**
+     * @param len must be <= 255 bytes!
+     * @returns Whatever comes back during the second byte transfer.
+     */
+    uint8_t spi_write_multi(uint8_t reg, const uint8_t* buf, uint8_t len);
+
+    uint32_t _random(uint32_t from, uint32_t to);
 
     /**
      * Causes a sleep
@@ -64,6 +80,7 @@ private:
      */
     void _delay(int ms);
 
+    Log& logger;
     Clock& _mainClock;
     int _resetPin;
 
@@ -94,6 +111,8 @@ private:
     CircularBufferImpl<256> _txBuffer;
     // There is a two-byte OOB allocation here for the RSSI data on receive
     CircularBufferImpl<2048> _rxBuffer;
+
+    spi_inst_t* _spi;
 };
 
 }
