@@ -106,19 +106,19 @@ int main(int, const char**) {
     PicoClock clock;
     PicoPollTimer radio_poll;
     radio_poll.setIntervalUs(50 * 1000);
-    Log logger;
+    Log log;
 
-    logger.info("LoRa Driver Demonstration 1");
+    log.info("LoRa Driver Demonstration 1");
 
-    SX1276Driver radio_0(logger, clock, reset_pin_0, spi_cs_pin_0, spi0);
-    radio_0.reset_radio();
+    SX1276Driver radio_0(log, clock, reset_pin_0, spi_cs_pin_0, spi0);
+    SX1276Driver radio_1(log, clock, reset_pin_1, spi_cs_pin_1, spi1);
+
+    // Start things by sending a message
     radio_0.send((const uint8_t*)"HELLO IZZY!", 10);
-
-    SX1276Driver radio_1(logger, clock, reset_pin_1, spi_cs_pin_1, spi1);
-    radio_1.reset_radio();
 
     while (true) {        
 
+        // Look for interrupt activity and notify the radios
         uint32_t int_state = save_and_disable_interrupts();
         if (int_flag_0) {
             radio_0.event_int();
@@ -138,6 +138,20 @@ int main(int, const char**) {
         if (radio_poll.poll()) {
             radio_0.event_tick();
             radio_1.event_tick();
+        }
+
+        // Check for receive activity on both radios
+        uint8_t buf[256];
+        unsigned int buf_len = 256;
+        if (radio_0.popReceiveIfNotEmpty(0, buf, &buf_len)) {
+            log.info("Radio 0 got %d", buf_len);
+            prettyHexDump(buf, buf_len, std::cout);
+        }
+        if (radio_1.popReceiveIfNotEmpty(0, buf, &buf_len)) {
+            log.info("Radio 1 got %d", buf_len);
+            prettyHexDump(buf, buf_len, std::cout);
+            // Echo
+            radio_1.send(buf, buf_len);
         }
     }
 }

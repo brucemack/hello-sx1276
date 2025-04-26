@@ -38,6 +38,10 @@ void SX1276Driver::send(const uint8_t* msg, uint32_t msg_len) {
     _txBuffer.push(0, msg, msg_len);
 }
 
+bool SX1276Driver::popReceiveIfNotEmpty(void* oobBuf, void* buf, unsigned int* len) {
+    return _rxBuffer.popIfNotEmpty(oobBuf, buf, len);
+}
+
 /**
  * @brief This should be called by the ISR
  */
@@ -50,7 +54,7 @@ void SX1276Driver::event_int() {
 
 void SX1276Driver::start_Tx() {
 
-    _log.info("start_Tx");
+    //_log.info("start_Tx");
 
     // At this point we have something pending to be sent.
     // Go into stand-by so we are allowed to fill the FIFO
@@ -92,9 +96,7 @@ void SX1276Driver::start_Rx() {
  * the CAD process later.
  */
 void SX1276Driver::start_Cad() {      
-
-    _log.info("start_Cad");
-
+    //_log.info("start_Cad");
     _state = State::CAD_STATE;
     _startCadTime = _mainClock.time();
     enable_interrupt_CadDone();
@@ -104,6 +106,10 @@ void SX1276Driver::start_Cad() {
 void SX1276Driver::start_Idle() {
     _state = State::IDLE_STATE;
     set_mode_STDBY();
+}
+
+void SX1276Driver::start_Restart() {
+    _state = State::RESTART_STATE;
 }
 
 /**
@@ -116,7 +122,7 @@ void SX1276Driver::event_TxDone(uint8_t irqFlags) {
 
     // If we expected this event
     if (_state == State::TX_STATE) {
-        _log.info("event_TxDone");
+        //_log.info("event_TxDone");
         // After transmit the radio goes back to standby mode
         // automatically
         _state = State::IDLE_STATE;
@@ -140,7 +146,7 @@ void SX1276Driver::event_RxDone(uint8_t irqFlags) {
 
     // Expected
     if (_state == State::RX_STATE) {
-        _log.info("event_RxDone");
+        //_log.info("event_RxDone");
         // Make sure we don't have any errors
         if (irqFlags & 0x20) {
             _log.error("CRC error");
@@ -176,10 +182,6 @@ void SX1276Driver::event_RxDone(uint8_t irqFlags) {
             // Put the RSSI (OOB) and the entire packet into the circular queue for 
             // later processing.
             _rxBuffer.push((const uint8_t*)&lastRssi, rx_buf, len);
-
-            // #### TODO: REMOVE
-            //_log.debugDump("RX", rx_buf, len);
-            _log.info("Got %d", len);
         }
         // NOTE: Stay in RX state
     }
@@ -198,7 +200,7 @@ void SX1276Driver::event_CadDone(uint8_t irqFlags) {
 
     // Expected
     if (_state == State::CAD_STATE) {
-        _log.info("event_CadDone");
+        //_log.info("event_CadDone");
         // This is the case where activity was detected
         if (irqFlags & 0x01) {
             _lastActivityTime = _mainClock.time();
@@ -225,7 +227,7 @@ void SX1276Driver::event_poll() {
         return;
     }
     
-    _log.info("Radio interrupt");
+    //_log.info("Radio interrupt");
 
     // *******************************************************************************
     // Critical Section:
@@ -265,18 +267,18 @@ void SX1276Driver::event_tick_Idle() {
     // Make sure the radio is in the state that we expect
     uint8_t state = spi_read(0x01);  
     if (state != 0x81) {
-        _log.error("Radio in unexpected state.");
-        reset_radio();
-        return;
+        _log.error("Radio in unexpected state (%d), resetting", (int)state);
+        start_Restart();
     }
-      
-    // Check to see if there is data waiting to go out
-    if (!_txBuffer.isEmpty()) {
-        // Launch a CAD check to see if the channel is clear
-        start_Cad(); 
-    } 
-    else {
-        start_Rx();
+    else {   
+        // Check to see if there is data waiting to go out
+        if (!_txBuffer.isEmpty()) {
+            // Launch a CAD check to see if the channel is clear before transmitting
+            start_Cad(); 
+        } 
+        else {
+            start_Rx();
+        }
     }
 }
 
@@ -332,8 +334,10 @@ void SX1276Driver::event_tick() {
     } else if (_state == State::CAD_STATE) {
         event_tick_Cad();
     } else if (_state == State::IDLE_STATE) {
-        event_tick_Idle();
-    } 
+        event_tick_Idle(); 
+    } else if (_state == State::RESTART_STATE) {
+        reset_radio();
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -383,9 +387,6 @@ void SX1276Driver::enable_interrupt_CadDone() {
     spi_write(0x40, 0x80);
 }
 
-/** Sets the radio frequency from a decimal value that is quoted
- *   in MHz.
- */
 // See page 103
 void SX1276Driver::set_frequency(float freq_mhz) {
     const float CRYSTAL_MHZ = 32000000.0;
@@ -406,27 +407,93 @@ void SX1276Driver::write_message(uint8_t* data, uint8_t len) {
 }
 
 int SX1276Driver::reset_radio() {
-   
+
+    // Hard reset
     gpio_set_dir(_resetPin, GPIO_OUT);
     gpio_put(_resetPin, 0);
     _delay(5);
     gpio_put(_resetPin, 1);
-    // Float the reset pin
+    // Float the reset pin?  This was done in the ESP32 version
+    // but appears not to be necessary in the RP2040 version.
     //gpio_set_dir(_resetPin, GPIO_IN);
     // Per datasheet, wait 5ms after reset
     _delay(5);
     // Not sure if this is really needed:
     _delay(250);
 
-    // Initialize the radio
-    if (init_radio() != 0) {
-        _log.error("Problem with radio initialization");
+    // Check the radio version to make sure things are connected
+    // properly.
+    uint8_t ver = spi_read(0x42);
+    if (ver == 0) {
+        _log.error("No radio found");
+        return -1;
+    } else if (ver < SX1276_EXPECTED_VERSION) {
+        _log.error("Version mismatch: %d", ver);
         return -1;
     }
 
-    _log.info("Radio initialized");
+    // Switch into Sleep mode, LoRa mode
+    spi_write(0x01, 0x80);
+
+    // Wait for sleep mode 
+    _delay(10); 
+
+    // Make sure we are actually in sleep mode
+    if (spi_read(0x01) != 0x80) {
+        return -2; 
+    }
+
+    // Setup the FIFO pointers
+    // TX base:
+    spi_write(0x0e, 0);
+    // RX base:
+    spi_write(0x0f, 0);
+
+    // Set frequency
+    set_frequency(STATION_FREQUENCY);
+
+    // Set LNA boost
+    spi_write(0x0c, spi_read(0x0c) | 0x03);
+
+    // AgcAutoOn=LNA gain set by AGC
+    spi_write(0x26, 0x04);
+
+    // DAC enable (adds 3dB)
+    spi_write(0x4d, 0x87);
+
+    // Turn on PA and set power to +20dB
+    // PaSelect=1
+    // OutputPower=17 (20 - 3dB from DAC)
+    spi_write(0x09, 0x80 | ((20 - 3) - 2));
+
+    // Set OCP to 140 (as per the Sandeep Mistry library)
+    // #### TODO: INVESTIGATE THIS SETTING
+    set_ocp(140);
+
+    // Go into stand-by
+    set_mode_STDBY();
+
+    // Configure the LoRa channel parameters
+    uint8_t reg = 0;
+
+    // 7-4:   0111  (125k BW)
+    // 3-1:   001   (4/5 coding rate)
+    // 0:     0     (Explicit header mode)
+    reg = 0b01110010;
+    spi_write(0x1d, reg);
+
+    // 7-4:   1001  (512 chips/symbol, spreading factor 9)
+    // 3:     0     (TX continuous mode normal)
+    // 2:     1     (CRC mode on)
+    // 1-0:   00    (RX timeout MSB) 
+    reg = 0b10010100;
+    spi_write(0x1e, reg);
+
+    _setLowDataRateOptimize();
 
     start_Idle();
+
+    //_log.info("Radio initialized");
 
     return 0;  
 }
@@ -447,114 +514,40 @@ void SX1276Driver::set_ocp(uint8_t current_ma) {
     spi_write(0x0b, 0x20 | (0x1F & trim));
 }
 
-void SX1276Driver::set_low_datarate() {
-
-    // Called after changing bandwidth and/or spreading factor
-    // Semtech modem design guide AN1200.13 says:
-    //
-    // "To avoid issues surrounding  drift  of  the  crystal  reference  oscillator  due  to  either  temperature  change  
-    // or  motion,the  low  data  rate optimization  bit  is  used. Specifically for 125  kHz  bandwidth  and  SF  =  11  and  12,  
-    // this  adds  a  small  overhead  to increase robustness to reference frequency variations over the timescale of the LoRa packet."
- 
-    // read current value for BW and SF
-    uint8_t bw = spi_read(0x1d) >> 4;	// bw is in bits 7..4
-    uint8_t sf = spi_read(0x1e) >> 4;	// sf is in bits 7..4
-   
-    // calculate symbol time (see Semtech AN1200.22 section 4)
-    float bw_tab[] = { 7800, 10400, 15600, 20800, 31250, 41700, 62500, 
-      125000, 250000, 500000};
-    float bandwidth = bw_tab[bw];
-    float symbolTime = 1000.0 * pow(2, sf) / bandwidth;	// ms
-   
-    // the symbolTime for SF 11 BW 125 is 16.384ms. 
-    // and, according to this :- 
-    // https://www.thethingsnetwork.org/forum/t/a-point-to-note-lora-low-data-rate-optimisation-flag/12007
-    // the LDR bit should be set if the Symbol Time is > 16ms
-    // So the threshold used here is 16.0ms
- 
-    // the LDR is bit 3 of register 0x26
-    uint8_t current = spi_read(0x26) & ~0x08; // mask off the LDR bit
-    if (symbolTime > 16.0)
-      spi_write(0x26, current | 0x08);
-    else
-      spi_write(0x26, current);   
-}
-
-/** 
- *  All of the one-time initialization of the radio
+/**
+ * Called after changing LoRa channel parameters.
+ * 
+ * Semtech modem design guide AN1200.13 (page 7-8) says:
+ * 
+ * "To avoid issues surrounding drift of the crystal reference oscillator due
+ * to either temperature change or motion, the low data rate optimization bit 
+ * is used. Specifically for 125 kHz bandwidth and SF=11 and 12,  
+ * this adds a small overhead to increase robustness to reference frequency 
+ * variations over the timescale of the LoRa packet."
+ * 
+ * In the Semtech SX1276 datasheet this bit is called the "LowDataRateOptimize" bit
+ * and the instructions state that it is mandatory when the symbol length exceeds 16ms.
  */
-int SX1276Driver::init_radio() {
+void SX1276Driver::_setLowDataRateOptimize() {
 
-    // Check the radio version to make sure things are connected
-    uint8_t ver = spi_read(0x42);
-    if (ver < SX1276_EXPECTED_VERSION) {
-        _log.error("Version mismatch");
-        return -1;
-    }
+    // Read current value for BW and SF from radio
+    uint8_t bw_idx = spi_read(0x1d) >> 4;
+    uint8_t sf = spi_read(0x1e) >> 4;
+    const uint32_t bw_tab[] = { 7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 
+                                250000, 500000 };
+    if (bw_idx > 9)
+        return;
+    uint32_t bw = bw_tab[bw_idx];
+    // Calculate symbol period per Semtech AN1200.22 section 4, page 9-10.
+    uint32_t symbol_period_ms = (1000 * (1 << sf)) / bw;
 
-    // Switch into Sleep mode, LoRa mode
-    spi_write(0x01, 0x80);
+    //_log.info("Bandwidth %u, sf %d, symbol ms %u", bw, (int)sf, symbol_period_ms);
 
-    // Wait for sleep mode 
-    _delay(10); 
-
-    // Make sure we are actually in sleep mode
-    if (spi_read(0x01) != 0x80) {
-        return -1; 
-    }
-
-    // Setup the FIFO pointers
-    // TX base:
-    spi_write(0x0e, 0);
-    // RX base:
-    spi_write(0x0f, 0);
-
-    set_frequency(STATION_FREQUENCY);
-
-    // Set LNA boost
-    spi_write(0x0c, spi_read(0x0c) | 0x03);
-
-    // AgcAutoOn=LNA gain set by AGC
-    spi_write(0x26, 0x04);
-
-    // DAC enable (adds 3dB)
-    spi_write(0x4d, 0x87);
-
-    // Turn on PA and set power to +20dB
-    // PaSelect=1
-    // OutputPower=17 (20 - 3dB from DAC)
-    spi_write(0x09, 0x80 | ((20 - 3) - 2));
-
-    // Set OCP to 140 (as per the Sandeep Mistry library)
-    set_ocp(140);
-
-    // Go into stand-by
-    set_mode_STDBY();
-
-    // Configure the radio
-    uint8_t reg = 0;
-
-    // 7-4: 0111  (125k BW)
-    // 3-1: 001   (4/5 coding rate)
-    // 0:   0     (Explicit header mode)
-    reg = 0b01110010;
-    spi_write(0x1d, reg);
-
-    // 7-4:   9 (512 chips/symbol, spreading factor 9)
-    // 3:     0 (TX continuous mode normal)
-    // 2:     1 (CRC mode on)
-    // 1-0:   0 (RX timeout MSB) 
-    reg = 0b10010100;
-    spi_write(0x1e, reg);
-
-    // Preable Length=8 (default)
-    // Preamble MSB and LSB
-    //spi_write(0x20, 8 >> 8);
-    //spi_write(0x21, 8 & 0xff);
-
-    set_low_datarate();
-
-    return 0;
+    uint8_t reg_modem_config_3 = spi_read(0x26);
+    if (symbol_period_ms > 16.0)
+        spi_write(0x26, reg_modem_config_3 | 0x08);
+    else
+        spi_write(0x26, reg_modem_config_3 & ~0x08);   
 }
 
 // ----- SPI Glue Code --------------------------------------------------------

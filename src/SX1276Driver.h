@@ -16,7 +16,6 @@ public:
 
     SX1276Driver(Log& log, Clock& clock, int reset_pin, int cs_pin, spi_inst_t* spi);
 
-    int reset_radio();
     // Called by interrupt pin
     void event_int();
     // This should be called every 50-100ms.
@@ -24,8 +23,18 @@ public:
     // This should be called as quickly/often as possible
     void event_poll();
 
+    /** 
+     * Sets the radio frequency from a decimal value that is quoted in MHz.
+     */
+    void set_frequency(float freq_mhz);
+
     // Puts something on the send queue
     void send(const uint8_t* msg, uint32_t msg_len);
+
+    /**
+     * @returns true if something was availble to be received.
+     */
+    bool popReceiveIfNotEmpty(void* oobBuf, void* buf, unsigned int* len);
 
 private:
 
@@ -33,6 +42,8 @@ private:
     void start_Rx();
     void start_Cad();
     void start_Idle();
+    void start_Restart();
+
     void event_TxDone(uint8_t irqFlags);
     void event_RxDone(uint8_t irqFlags);
     void event_CadDone(uint8_t irqFlags);
@@ -40,6 +51,7 @@ private:
     void event_tick_Tx();
     void event_tick_Rx();
     void event_tick_Cad();
+    int reset_radio();
 
     void set_mode_SLEEP();
     void set_mode_STDBY();
@@ -51,11 +63,13 @@ private:
     void enable_interrupt_TxDone();    
     void enable_interrupt_RxDone();
     void enable_interrupt_CadDone();
-    void set_frequency(float freq_mhz);
     void write_message(uint8_t* data, uint8_t len);
     void set_ocp(uint8_t current_ma);
-    void set_low_datarate();
-    int init_radio(); 
+
+    /**
+     * @brief Should be called whenever LoRa parameters change.
+     */
+    void _setLowDataRateOptimize();
 
     uint8_t spi_read(uint8_t reg);
 
@@ -89,10 +103,9 @@ private:
     int _csPin;
 
     // The states of the state machine
-    enum State { IDLE_STATE, RX_STATE, TX_STATE, CAD_STATE };
+    enum State { RESTART_STATE, IDLE_STATE, RX_STATE, TX_STATE, CAD_STATE };
+    volatile State _state = State::RESTART_STATE;
 
-    // The overall state
-    volatile State _state = State::IDLE_STATE;
     // This is volatile because it is set inside of the ISR context
     volatile bool _isrHit = false;
 
