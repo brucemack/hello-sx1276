@@ -1,13 +1,15 @@
 Project Setup
 =============
 
-Initialize submodules:
-
         git submodule update --init --recursive
+        mkdir build
+        cd build
+        cmake -DPICO_BOARD=pico ..
 
 Build/Run
 =========
 
+        make main
         ~/git/openocd/src/openocd -s ~/git/openocd/tcl -f interface/cmsis-dap.cfg -f target/rp2040.cfg -c "adapter speed 500" -c "program main.elf verify reset exit"
 
 Hardware Setup
