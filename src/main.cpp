@@ -18,7 +18,7 @@
 #include "kc1fsz-tools/Log.h"
 #include "kc1fsz-tools/rp2040/PicoClock.h"
 #include "kc1fsz-tools/rp2040/PicoPollTimer.h"
-#include "SX1276Driver.h"
+#include "kc1fsz-tools/rp2040/SX1276Driver.h"
 
 using namespace kc1fsz;
 
